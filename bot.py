@@ -289,4 +289,4 @@ if __name__ == "__main__":
     print("Port:", PORT)
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), BotHandler)
-    server.
+    server.serve_forever()
