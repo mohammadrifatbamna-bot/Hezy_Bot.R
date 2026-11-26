@@ -11,7 +11,7 @@ lock = Lock()
 
 
 def details(number):
-    big_small = "BIG" if number >= 5 else "SMALL"
+    bs = "BIG" if number >= 5 else "SMALL"
 
     if number == 0:
         color = "RED + VIOLET"
@@ -22,7 +22,7 @@ def details(number):
     else:
         color = "RED"
 
-    return big_small, color
+    return bs, color
 
 
 def load_results():
@@ -67,44 +67,48 @@ def save_results(results):
     )
 
 
+def make_period(results):
+    numeric = [
+        int(r["period"])
+        for r in results
+        if str(r["period"]).isdigit()
+    ]
+    return str(max(numeric, default=0) + 1)
+
+
 def analyze(results):
     recent = results[-10:]
 
     big = sum(r["number"] >= 5 for r in recent)
     small = len(recent) - big
 
-    if len(recent) < 5:
+    if not recent:
         signal = "WAIT"
         confidence = 0
-        message = "Need at least 5 results"
+        message = "Add numbers to start analysis."
+
     elif big > small:
         signal = "BIG"
         confidence = round(big / len(recent) * 100)
         message = "Statistical estimate, not guaranteed."
+
     elif small > big:
         signal = "SMALL"
         confidence = round(small / len(recent) * 100)
         message = "Statistical estimate, not guaranteed."
+
     else:
         signal = "WAIT"
         confidence = 50
         message = "BIG and SMALL are equal."
 
-    numeric_periods = [
-        int(r["period"])
-        for r in results
-        if r["period"].isdigit()
-    ]
-
-    next_period = (
-        str(max(numeric_periods) + 1)
-        if numeric_periods else "Waiting"
-    )
+    if 0 < len(recent) < 5:
+        message = "Low sample size. Estimate may change."
 
     return {
         "signal": signal,
         "next_signal": signal,
-        "next_period": next_period,
+        "next_period": make_period(results),
         "confidence": confidence,
         "big": big,
         "small": small,
@@ -157,7 +161,7 @@ textarea, button {
 }
 textarea {
     width: 90%;
-    height: 150px;
+    height: 130px;
     background: #f1f5f9;
     color: #111827;
 }
@@ -213,15 +217,17 @@ td, th {
 </div>
 
 <div class="card">
-<h2>ADD MULTIPLE RESULTS</h2>
-<p class="small">Format: Period,Number (one per line)</p>
+<h2>ADD NUMBERS ONLY</h2>
+<p class="small">শুধু 0 থেকে 9 পর্যন্ত Number লেখো। প্রতি লাইনে একটি।</p>
 
-<textarea id="bulk" placeholder="20261126100052360,7
-20261126100052359,8
-20261126100052358,4"></textarea>
+<textarea id="bulk" placeholder="8
+3
+5
+1
+7"></textarea>
 
 <br>
-<button onclick="addResults()">ADD RESULTS</button>
+<button onclick="addResults()">ADD NUMBERS</button>
 <p id="response"></p>
 </div>
 
@@ -244,7 +250,7 @@ td, th {
 
 <p class="small">
 Dashboard refreshes every 30 seconds.
-New game results must be entered manually.
+New game numbers must be entered manually.
 Predictions are statistical estimates only.
 </p>
 
@@ -252,7 +258,6 @@ Predictions are statistical estimates only.
 async function refresh() {
     try {
         const response = await fetch('/api/analyze');
-
         if (!response.ok) throw new Error("API error");
 
         const data = await response.json();
@@ -275,8 +280,6 @@ async function refresh() {
             a.confidence;
 
         const h = await fetch('/api/history');
-        if (!h.ok) throw new Error("History error");
-
         const history = await h.json();
         const tbody = document.getElementById('history');
 
@@ -306,40 +309,25 @@ async function addResults() {
     const responseBox = document.getElementById('response');
 
     const lines = textarea.value.trim().split(/\\r?\\n/);
-    const results = [];
+    const numbers = [];
 
     for (const line of lines) {
         if (!line.trim()) continue;
 
-        const parts = line.split(',').map(x => x.trim());
+        const value = line.trim();
 
-        if (
-            parts.length !== 2 ||
-            !parts[0] ||
-            !/^\\d+$/.test(parts[1])
-        ) {
+        if (!/^\\d$/.test(value)) {
             responseBox.innerText =
-                'Invalid format: use Period,Number';
+                'শুধু 0 থেকে 9 পর্যন্ত Number লেখো।';
             return;
         }
 
-        const number = Number(parts[1]);
-
-        if (!Number.isInteger(number) || number < 0 || number > 9) {
-            responseBox.innerText =
-                'Number must be between 0 and 9';
-            return;
-        }
-
-        results.push({
-            period: parts[0],
-            number: number
-        });
+        numbers.push(Number(value));
     }
 
-    if (results.length < 1 || results.length > 10) {
+    if (numbers.length < 1 || numbers.length > 10) {
         responseBox.innerText =
-            'Enter between 1 and 10 results';
+            'একবারে 1 থেকে 10টি Number দাও।';
         return;
     }
 
@@ -347,7 +335,7 @@ async function addResults() {
         const response = await fetch('/api/add-bulk', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({results: results})
+            body: JSON.stringify({numbers: numbers})
         });
 
         const data = await response.json();
@@ -357,8 +345,7 @@ async function addResults() {
         }
 
         responseBox.innerText =
-            'Added: ' + data.added +
-            ' | Skipped: ' + data.skipped;
+            'Added: ' + data.added;
 
         textarea.value = '';
         await refresh();
@@ -398,7 +385,6 @@ class BotHandler(BaseHTTPRequestHandler):
 
         if path == "/":
             body = HTML.encode("utf-8")
-
             self.send_response(200)
             self.send_header(
                 "Content-Type",
@@ -430,14 +416,12 @@ class BotHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?")[0]
 
-        if path not in ("/api/add", "/api/add-bulk"):
+        if path != "/api/add-bulk":
             self.send_json({"error": "Not found"}, 404)
             return
 
         try:
-            length = int(
-                self.headers.get("Content-Length", "0")
-            )
+            length = int(self.headers.get("Content-Length", "0"))
 
             if length <= 0 or length > 10000:
                 self.send_json(
@@ -446,61 +430,34 @@ class BotHandler(BaseHTTPRequestHandler):
                 return
 
             data = json.loads(self.rfile.read(length))
-
-            if path == "/api/add":
-                items = [{
-                    "period": str(data.get("period", "")).strip(),
-                    "number": data.get("number")
-                }]
-            else:
-                items = data.get("results")
+            numbers = data.get("numbers")
 
             if (
-                not isinstance(items, list)
-                or not 1 <= len(items) <= 10
+                not isinstance(numbers, list)
+                or not 1 <= len(numbers) <= 10
             ):
                 self.send_json(
-                    {"error": "Enter 1 to 10 results"}, 400
+                    {"error": "Enter 1 to 10 numbers"}, 400
                 )
                 return
 
-            for item in items:
-                if not isinstance(item, dict):
-                    raise ValueError()
-
-                period = str(
-                    item.get("period", "")
-                ).strip()
-
-                number = item.get("number")
-
-                if not period or len(period) > 40:
-                    raise ValueError()
-
+            for number in numbers:
                 if (
                     isinstance(number, bool)
                     or not isinstance(number, int)
                     or not 0 <= number <= 9
                 ):
-                    raise ValueError()
-
-            added = 0
-            skipped = 0
+                    self.send_json(
+                        {"error": "Numbers must be 0 to 9"}, 400
+                    )
+                    return
 
             with lock:
                 results = load_results()
-                existing = {
-                    r["period"] for r in results
-                }
+                added = 0
 
-                for item in items:
-                    period = str(item["period"]).strip()
-
-                    if period in existing:
-                        skipped += 1
-                        continue
-
-                    number = item["number"]
+                for number in numbers:
+                    period = make_period(results)
                     bs, color = details(number)
 
                     results.append({
@@ -509,8 +466,6 @@ class BotHandler(BaseHTTPRequestHandler):
                         "big_small": bs,
                         "color": color
                     })
-
-                    existing.add(period)
                     added += 1
 
                 results = results[-100:]
@@ -520,16 +475,10 @@ class BotHandler(BaseHTTPRequestHandler):
             self.send_json({
                 "status": "success",
                 "added": added,
-                "skipped": skipped,
                 "analysis": analysis
             })
 
-        except (
-            ValueError,
-            TypeError,
-            KeyError,
-            json.JSONDecodeError
-        ):
+        except (ValueError, TypeError, KeyError):
             self.send_json(
                 {"error": "Invalid result data"}, 400
             )
