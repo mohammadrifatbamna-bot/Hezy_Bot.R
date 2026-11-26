@@ -77,33 +77,31 @@ def make_period(results):
 
 
 def analyze(results):
-    recent = results[-10:]
+    recent = results[-20:]
+    total = len(recent)
 
     big = sum(r["number"] >= 5 for r in recent)
-    small = len(recent) - big
+    small = total - big
 
-    if not recent:
+    if total < 5:
         signal = "WAIT"
         confidence = 0
-        message = "Add numbers to start analysis."
+        message = "Need at least 5 results for analysis."
 
     elif big > small:
         signal = "BIG"
-        confidence = round(big / len(recent) * 100)
-        message = "Statistical estimate, not guaranteed."
+        confidence = round(big / total * 100)
+        message = "BIG appeared more often in recent results."
 
     elif small > big:
         signal = "SMALL"
-        confidence = round(small / len(recent) * 100)
-        message = "Statistical estimate, not guaranteed."
+        confidence = round(small / total * 100)
+        message = "SMALL appeared more often in recent results."
 
     else:
         signal = "WAIT"
-        confidence = 50
+        confidence = 0
         message = "BIG and SMALL are equal."
-
-    if 0 < len(recent) < 5:
-        message = "Low sample size. Estimate may change."
 
     return {
         "signal": signal,
@@ -125,67 +123,64 @@ HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wingo 30 Seconds Bot</title>
-
 <style>
 body {
-    background: #101827;
-    color: white;
-    font-family: Arial;
-    text-align: center;
-    padding: 12px;
+    background:#101827;
+    color:white;
+    font-family:Arial,sans-serif;
+    text-align:center;
+    padding:12px;
 }
 .card {
-    background: #1e293b;
-    padding: 18px;
-    margin: 15px auto;
-    border-radius: 12px;
-    max-width: 550px;
+    background:#1e293b;
+    padding:18px;
+    margin:15px auto;
+    border-radius:12px;
+    max-width:550px;
 }
-h1 { color: #38bdf8; }
+h1 {color:#38bdf8;}
 .signal {
-    font-size: 35px;
-    font-weight: bold;
+    font-size:35px;
+    font-weight:bold;
 }
 .prediction {
-    font-size: 30px;
-    font-weight: bold;
-    color: #22c55e;
+    font-size:30px;
+    font-weight:bold;
+    color:#22c55e;
 }
-textarea, button {
-    padding: 12px;
-    margin: 6px;
-    border-radius: 8px;
-    border: 0;
-    font-size: 16px;
-    max-width: 95%;
+textarea,button {
+    padding:12px;
+    margin:6px;
+    border-radius:8px;
+    border:0;
+    font-size:16px;
+    max-width:95%;
 }
 textarea {
-    width: 90%;
-    height: 130px;
-    background: #f1f5f9;
-    color: #111827;
+    width:90%;
+    height:130px;
+    background:#f1f5f9;
+    color:#111827;
 }
 button {
-    background: #0ea5e9;
-    color: white;
-    cursor: pointer;
+    background:#0ea5e9;
+    color:white;
 }
 table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
+    width:100%;
+    border-collapse:collapse;
+    font-size:12px;
 }
-td, th {
-    padding: 9px 3px;
-    border-bottom: 1px solid #475569;
+td,th {
+    padding:9px 3px;
+    border-bottom:1px solid #475569;
 }
 .small {
-    color: #94a3b8;
-    font-size: 12px;
+    color:#94a3b8;
+    font-size:12px;
 }
 </style>
 </head>
-
 <body>
 
 <h1>WINGO 30 SECONDS</h1>
@@ -198,34 +193,31 @@ td, th {
 <div class="card">
 <h2>NEXT PERIOD</h2>
 <div class="prediction" id="nextPeriod">Waiting</div>
-
 <h2>NEXT BIG / SMALL</h2>
 <div class="signal" id="nextSignal">WAIT</div>
-
-<p>Confidence: <span id="nextConfidence">0</span>%</p>
+<p>Historical Share: <span id="nextConfidence">0</span>%</p>
 <p class="small">Statistical estimate, not guaranteed.</p>
 </div>
 
 <div class="card">
 <h2>LIVE ANALYSIS</h2>
 <div class="signal" id="signal">WAIT</div>
-<p>Confidence: <span id="confidence">0</span>%</p>
+<p>Historical Share: <span id="confidence">0</span>%</p>
 <p>BIG: <span id="big">0</span></p>
 <p>SMALL: <span id="small">0</span></p>
+<p>TOTAL: <span id="total">0</span></p>
 <p id="message">Waiting for results...</p>
 <p class="small" id="updated">--</p>
 </div>
 
 <div class="card">
 <h2>ADD NUMBERS ONLY</h2>
-<p class="small">শুধু 0 থেকে 9 পর্যন্ত Number লেখো। প্রতি লাইনে একটি।</p>
-
+<p class="small">0 থেকে 9 পর্যন্ত সংখ্যা লেখো। প্রতি লাইনে একটি।</p>
 <textarea id="bulk" placeholder="8
 3
 5
 1
 7"></textarea>
-
 <br>
 <button onclick="addResults()">ADD NUMBERS</button>
 <p id="response"></p>
@@ -250,8 +242,7 @@ td, th {
 
 <p class="small">
 Dashboard refreshes every 30 seconds.
-New game numbers must be entered manually.
-Predictions are statistical estimates only.
+Numbers must be entered manually.
 </p>
 
 <script>
@@ -268,6 +259,7 @@ async function refresh() {
         document.getElementById('confidence').innerText = a.confidence;
         document.getElementById('big').innerText = a.big;
         document.getElementById('small').innerText = a.small;
+        document.getElementById('total').innerText = a.total_results;
         document.getElementById('message').innerText = a.message;
         document.getElementById('updated').innerText =
             'Last update: ' + a.updated;
@@ -280,15 +272,16 @@ async function refresh() {
             a.confidence;
 
         const h = await fetch('/api/history');
+        if (!h.ok) throw new Error("History error");
+
         const history = await h.json();
         const tbody = document.getElementById('history');
-
         tbody.replaceChildren();
 
         history.results.slice().reverse().forEach(r => {
             const tr = document.createElement('tr');
 
-            [r.period, r.number, r.big_small, r.color].forEach(value => {
+            [r.period,r.number,r.big_small,r.color].forEach(value => {
                 const td = document.createElement('td');
                 td.textContent = value;
                 tr.appendChild(td);
@@ -302,7 +295,6 @@ async function refresh() {
             'CONNECTION ERROR';
     }
 }
-
 
 async function addResults() {
     const textarea = document.getElementById('bulk');
@@ -333,9 +325,9 @@ async function addResults() {
 
     try {
         const response = await fetch('/api/add-bulk', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({numbers: numbers})
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({numbers:numbers})
         });
 
         const data = await response.json();
@@ -344,9 +336,7 @@ async function addResults() {
             throw new Error(data.error || 'Failed');
         }
 
-        responseBox.innerText =
-            'Added: ' + data.added;
-
+        responseBox.innerText = 'Added: ' + data.added;
         textarea.value = '';
         await refresh();
 
@@ -356,9 +346,8 @@ async function addResults() {
 }
 
 refresh();
-setInterval(refresh, 30000);
+setInterval(refresh,30000);
 </script>
-
 </body>
 </html>
 """
@@ -411,45 +400,36 @@ class BotHandler(BaseHTTPRequestHandler):
             })
 
         else:
-            self.send_json({"error": "Not found"}, 404)
+            self.send_json({"error":"Not found"},404)
 
     def do_POST(self):
         path = self.path.split("?")[0]
 
         if path != "/api/add-bulk":
-            self.send_json({"error": "Not found"}, 404)
+            self.send_json({"error":"Not found"},404)
             return
 
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            length = int(self.headers.get("Content-Length","0"))
 
             if length <= 0 or length > 10000:
-                self.send_json(
-                    {"error": "Invalid request size"}, 400
-                )
+                self.send_json({"error":"Invalid request size"},400)
                 return
 
             data = json.loads(self.rfile.read(length))
             numbers = data.get("numbers")
 
-            if (
-                not isinstance(numbers, list)
-                or not 1 <= len(numbers) <= 10
-            ):
-                self.send_json(
-                    {"error": "Enter 1 to 10 numbers"}, 400
-                )
+            if not isinstance(numbers,list) or not 1 <= len(numbers) <= 10:
+                self.send_json({"error":"Enter 1 to 10 numbers"},400)
                 return
 
             for number in numbers:
                 if (
-                    isinstance(number, bool)
-                    or not isinstance(number, int)
+                    isinstance(number,bool)
+                    or not isinstance(number,int)
                     or not 0 <= number <= 9
                 ):
-                    self.send_json(
-                        {"error": "Numbers must be 0 to 9"}, 400
-                    )
+                    self.send_json({"error":"Numbers must be 0 to 9"},400)
                     return
 
             with lock:
@@ -458,13 +438,13 @@ class BotHandler(BaseHTTPRequestHandler):
 
                 for number in numbers:
                     period = make_period(results)
-                    bs, color = details(number)
+                    bs,color = details(number)
 
                     results.append({
-                        "period": period,
-                        "number": number,
-                        "big_small": bs,
-                        "color": color
+                        "period":period,
+                        "number":number,
+                        "big_small":bs,
+                        "color":color
                     })
                     added += 1
 
@@ -473,26 +453,24 @@ class BotHandler(BaseHTTPRequestHandler):
                 analysis = analyze(results)
 
             self.send_json({
-                "status": "success",
-                "added": added,
-                "analysis": analysis
+                "status":"success",
+                "added":added,
+                "analysis":analysis
             })
 
-        except (ValueError, TypeError, KeyError):
-            self.send_json(
-                {"error": "Invalid result data"}, 400
-            )
+        except (ValueError,TypeError,KeyError):
+            self.send_json({"error":"Invalid result data"},400)
 
     def log_message(self, format, *args):
         pass
 
 
 if __name__ == "__main__":
-    print("Wingo 30 Seconds Analysis Dashboard ACTIVE")
-    print("Port:", PORT)
+    print("Wingo 30 Seconds Bot ACTIVE")
+    print("Port:",PORT)
 
     server = ThreadingHTTPServer(
-        ("0.0.0.0", PORT),
+        ("0.0.0.0",PORT),
         BotHandler
     )
     server.serve_forever()
