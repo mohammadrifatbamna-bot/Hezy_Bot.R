@@ -5,348 +5,295 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 
-PORT = int(os.environ.get("PORT", 8000))
+PORT = int(os.environ.get("PORT", "8000"))
 DATA_FILE = Path("results.json")
 lock = Lock()
 
 
-def details(number):
-    bs = "BIG" if number >= 5 else "SMALL"
-
-    if number == 0:
-        color = "RED + VIOLET"
-    elif number == 5:
-        color = "GREEN + VIOLET"
-    elif number in (1, 3, 7, 9):
-        color = "GREEN"
-    else:
-        color = "RED"
-
-    return bs, color
-
-
 def load_results():
     try:
-        data = json.loads(DATA_FILE.read_text())
+        data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+        results = []
+
         if not isinstance(data, list):
             return []
 
-        results = []
+        for item in data:
+            try:
+                if isinstance(item, dict):
+                    number = int(item.get("number", -1))
+                    period = str(item.get("period", ""))
+                    timestamp = str(item.get("time", ""))
+                else:
+                    number = int(item)
+                    period = ""
+                    timestamp = ""
 
-        for i, item in enumerate(data):
-            if isinstance(item, dict):
-                period = str(item.get("period", "")).strip()
-                number = item.get("number")
-            else:
-                period = "OLD-" + str(i + 1)
-                number = item
-
-            if (
-                period
-                and isinstance(number, int)
-                and not isinstance(number, bool)
-                and 0 <= number <= 9
-            ):
-                bs, color = details(number)
-                results.append({
-                    "period": period,
-                    "number": number,
-                    "big_small": bs,
-                    "color": color
-                })
+                if 0 <= number <= 9:
+                    results.append({
+                        "period": period,
+                        "number": number,
+                        "time": timestamp
+                    })
+            except (ValueError, TypeError):
+                continue
 
         return results[-100:]
 
-    except (OSError, ValueError, TypeError):
+    except (OSError, json.JSONDecodeError):
         return []
 
 
-def save_results(results):
+results = load_results()
+
+
+def save_results():
     DATA_FILE.write_text(
-        json.dumps(results[-100:], ensure_ascii=False)
+        json.dumps(results, ensure_ascii=False, indent=2),
+        encoding="utf-8"
     )
 
 
-def make_period(results):
-    numeric = [
-        int(r["period"])
-        for r in results
-        if str(r["period"]).isdigit()
-    ]
-    return str(max(numeric, default=0) + 1)
+def make_period():
+    if not results:
+        return "1"
+
+    try:
+        return str(int(results[-1]["period"]) + 1)
+    except (ValueError, TypeError):
+        return str(len(results) + 1)
 
 
-def analyze(results):
+def analyze():
     recent = results[-20:]
     total = len(recent)
 
-    big = sum(r["number"] >= 5 for r in recent)
+    big = sum(1 for item in recent if item["number"] >= 5)
     small = total - big
 
-    if total < 5:
+    if total == 0:
         signal = "WAIT"
         confidence = 0
-        message = "Need at least 5 results for analysis."
-
     elif big > small:
         signal = "BIG"
-        confidence = round(big / total * 100)
-        message = "BIG appeared more often in recent results."
-
+        confidence = round((big / total) * 100)
     elif small > big:
         signal = "SMALL"
-        confidence = round(small / total * 100)
-        message = "SMALL appeared more often in recent results."
-
+        confidence = round((small / total) * 100)
     else:
         signal = "WAIT"
-        confidence = 0
-        message = "BIG and SMALL are equal."
+        confidence = 50
 
     return {
+        "status": "ACTIVE",
+        "next_period": make_period(),
         "signal": signal,
-        "next_signal": signal,
-        "next_period": make_period(results),
         "confidence": confidence,
         "big": big,
         "small": small,
-        "last_results": recent,
-        "total_results": len(results),
-        "updated": datetime.now(timezone.utc).isoformat(),
-        "message": message
+        "total": total,
+        "last_update": datetime.now(timezone.utc).isoformat()
     }
 
 
-HTML = """
+HTML = r"""
 <!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wingo 30 Seconds Bot</title>
+<title>WINGO BIG SMALL BOT</title>
 <style>
-body {
+*{box-sizing:border-box}
+body{
+    margin:0;
+    padding:16px;
     background:#101827;
     color:white;
     font-family:Arial,sans-serif;
-    text-align:center;
-    padding:12px;
 }
-.card {
+.container{max-width:500px;margin:auto}
+h2{text-align:center;color:#38bdf8}
+.card{
     background:#1e293b;
     padding:18px;
-    margin:15px auto;
-    border-radius:12px;
-    max-width:550px;
+    margin:13px 0;
+    border-radius:14px;
+    text-align:center;
 }
-h1 {color:#38bdf8;}
-.signal {
-    font-size:35px;
-    font-weight:bold;
-}
-.prediction {
-    font-size:30px;
-    font-weight:bold;
-    color:#22c55e;
-}
-textarea,button {
-    padding:12px;
-    margin:6px;
-    border-radius:8px;
+.heading{color:#94a3b8;font-size:14px}
+.signal{font-size:32px;font-weight:bold;margin:10px}
+.big{color:#22c55e}
+.small{color:#f87171}
+.wait{color:#facc15}
+.value{font-size:25px;font-weight:bold;margin:8px}
+input{
+    width:100%;
+    padding:16px;
+    font-size:24px;
+    text-align:center;
     border:0;
-    font-size:16px;
-    max-width:95%;
+    border-radius:10px;
+    margin:12px 0;
 }
-textarea {
-    width:90%;
-    height:130px;
-    background:#f1f5f9;
-    color:#111827;
-}
-button {
+button{
+    width:100%;
+    padding:15px;
+    border:0;
+    border-radius:10px;
     background:#0ea5e9;
     color:white;
+    font-size:18px;
+    font-weight:bold;
 }
-table {
-    width:100%;
-    border-collapse:collapse;
-    font-size:12px;
-}
-td,th {
-    padding:9px 3px;
-    border-bottom:1px solid #475569;
-}
-.small {
-    color:#94a3b8;
-    font-size:12px;
+button:disabled{opacity:.5}
+.note{font-size:12px;color:#94a3b8;line-height:1.5}
+#message{margin-top:10px;color:#38bdf8}
+.history{text-align:left}
+.history-row{
+    display:flex;
+    justify-content:space-between;
+    padding:10px;
+    border-bottom:1px solid #334155;
 }
 </style>
 </head>
 <body>
+<div class="container">
 
-<h1>WINGO 30 SECONDS</h1>
-
-<div class="card">
-<h2>BOT STATUS</h2>
-<div id="status">Connecting...</div>
-</div>
+<h2>WINGO 30 SECONDS</h2>
 
 <div class="card">
-<h2>NEXT PERIOD</h2>
-<div class="prediction" id="nextPeriod">Waiting</div>
-<h2>NEXT BIG / SMALL</h2>
-<div class="signal" id="nextSignal">WAIT</div>
-<p>Historical Share: <span id="nextConfidence">0</span>%</p>
-<p class="small">Statistical estimate, not guaranteed.</p>
+    <div class="heading">BOT STATUS</div>
+    <div class="value big">ACTIVE</div>
+    <div class="heading">NEXT PERIOD</div>
+    <div class="value" id="period">Waiting</div>
 </div>
 
 <div class="card">
-<h2>LIVE ANALYSIS</h2>
-<div class="signal" id="signal">WAIT</div>
-<p>Historical Share: <span id="confidence">0</span>%</p>
-<p>BIG: <span id="big">0</span></p>
-<p>SMALL: <span id="small">0</span></p>
-<p>TOTAL: <span id="total">0</span></p>
-<p id="message">Waiting for results...</p>
-<p class="small" id="updated">--</p>
+    <div class="heading">NEXT BIG / SMALL</div>
+    <div class="signal wait" id="signal">WAIT</div>
+    <div class="heading">Historical Share</div>
+    <div class="value" id="confidence">0%</div>
+    <div class="note">Statistical estimate from entered results, not a guaranteed prediction.</div>
 </div>
 
 <div class="card">
-<h2>ADD NUMBERS ONLY</h2>
-<p class="small">0 থেকে 9 পর্যন্ত সংখ্যা লেখো। প্রতি লাইনে একটি।</p>
-<textarea id="bulk" placeholder="8
-3
-5
-1
-7"></textarea>
-<br>
-<button onclick="addResults()">ADD NUMBERS</button>
-<p id="response"></p>
+    <div class="heading">LIVE ANALYSIS</div>
+    <div class="signal wait" id="live">WAIT</div>
+    <div class="heading">BIG</div>
+    <div class="value big" id="big">0</div>
+    <div class="heading">SMALL</div>
+    <div class="value small" id="small">0</div>
+    <div class="heading">TOTAL RESULTS</div>
+    <div class="value" id="total">0</div>
 </div>
 
 <div class="card">
-<h2>RESULT HISTORY</h2>
-<div style="overflow-x:auto">
-<table>
-<thead>
-<tr>
-<th>Period</th>
-<th>Number</th>
-<th>BIG/SMALL</th>
-<th>Color</th>
-</tr>
-</thead>
-<tbody id="history"></tbody>
-</table>
-</div>
+    <div class="heading">ADD ONE RESULT ONLY</div>
+    <input id="number" type="number" min="0" max="9"
+           inputmode="numeric" placeholder="Enter 0 - 9">
+    <button id="addButton" onclick="addResult()">ADD RESULT</button>
+    <div id="message"></div>
 </div>
 
-<p class="small">
-Dashboard refreshes every 30 seconds.
-Numbers must be entered manually.
+<div class="card history">
+    <div class="heading" style="text-align:center">RESULT HISTORY</div>
+    <div id="history">No results yet</div>
+</div>
+
+<p class="note" style="text-align:center">
+Analysis uses the last 20 entered results. It cannot guarantee the next outcome.
 </p>
 
+</div>
+
 <script>
-async function refresh() {
-    try {
+async function refresh(){
+    try{
         const response = await fetch('/api/analyze');
-        if (!response.ok) throw new Error("API error");
-
         const data = await response.json();
-        const a = data.analysis;
 
-        document.getElementById('status').innerText = 'ACTIVE';
-        document.getElementById('signal').innerText = a.signal;
-        document.getElementById('confidence').innerText = a.confidence;
-        document.getElementById('big').innerText = a.big;
-        document.getElementById('small').innerText = a.small;
-        document.getElementById('total').innerText = a.total_results;
-        document.getElementById('message').innerText = a.message;
-        document.getElementById('updated').innerText =
-            'Last update: ' + a.updated;
+        document.getElementById('period').textContent = data.next_period;
+        document.getElementById('signal').textContent = data.signal;
+        document.getElementById('live').textContent = data.signal;
+        document.getElementById('confidence').textContent =
+            data.confidence + '%';
+        document.getElementById('big').textContent = data.big;
+        document.getElementById('small').textContent = data.small;
+        document.getElementById('total').textContent = data.total;
 
-        document.getElementById('nextPeriod').innerText =
-            a.next_period;
-        document.getElementById('nextSignal').innerText =
-            a.next_signal;
-        document.getElementById('nextConfidence').innerText =
-            a.confidence;
+        const cls = data.signal === 'BIG' ? 'big' :
+                    data.signal === 'SMALL' ? 'small' : 'wait';
 
-        const h = await fetch('/api/history');
-        if (!h.ok) throw new Error("History error");
+        document.getElementById('signal').className = 'signal ' + cls;
+        document.getElementById('live').className = 'signal ' + cls;
 
-        const history = await h.json();
-        const tbody = document.getElementById('history');
-        tbody.replaceChildren();
+        const historyResponse = await fetch('/api/history');
+        const historyData = await historyResponse.json();
 
-        history.results.slice().reverse().forEach(r => {
-            const tr = document.createElement('tr');
-
-            [r.period,r.number,r.big_small,r.color].forEach(value => {
-                const td = document.createElement('td');
-                td.textContent = value;
-                tr.appendChild(td);
-            });
-
-            tbody.appendChild(tr);
-        });
-
-    } catch (error) {
-        document.getElementById('status').innerText =
-            'CONNECTION ERROR';
+        const box = document.getElementById('history');
+        if(historyData.results.length === 0){
+            box.textContent = 'No results yet';
+        }else{
+            box.innerHTML = historyData.results.slice().reverse().map(item => {
+                const type = item.number >= 5 ? 'BIG' : 'SMALL';
+                const color = item.number >= 5 ? 'big' : 'small';
+                return `<div class="history-row">
+                    <span>Period ${item.period}</span>
+                    <b class="${color}">${item.number} - ${type}</b>
+                </div>`;
+            }).join('');
+        }
+    }catch(error){
+        document.getElementById('message').textContent =
+            'Connection error. Refresh the page.';
     }
 }
 
-async function addResults() {
-    const textarea = document.getElementById('bulk');
-    const responseBox = document.getElementById('response');
+async function addResult(){
+    const input = document.getElementById('number');
+    const button = document.getElementById('addButton');
+    const message = document.getElementById('message');
+    const value = input.value.trim();
 
-    const lines = textarea.value.trim().split(/\\r?\\n/);
-    const numbers = [];
-
-    for (const line of lines) {
-        if (!line.trim()) continue;
-
-        const value = line.trim();
-
-        if (!/^\\d$/.test(value)) {
-            responseBox.innerText =
-                'শুধু 0 থেকে 9 পর্যন্ত Number লেখো।';
-            return;
-        }
-
-        numbers.push(Number(value));
-    }
-
-    if (numbers.length < 1 || numbers.length > 10) {
-        responseBox.innerText =
-            'একবারে 1 থেকে 10টি Number দাও।';
+    if(!/^[0-9]$/.test(value)){
+        message.textContent = 'Please enter only one digit from 0 to 9.';
         return;
     }
 
-    try {
-        const response = await fetch('/api/add-bulk', {
+    button.disabled = true;
+    message.textContent = 'Adding result...';
+
+    try{
+        const response = await fetch('/api/add', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({numbers:numbers})
+            body:JSON.stringify({number:Number(value)})
         });
 
         const data = await response.json();
 
-        if (!response.ok) {
-            throw new Error(data.error || 'Failed');
+        if(!response.ok){
+            message.textContent = data.error || 'Could not add result.';
+        }else{
+            message.textContent = 'Result added successfully!';
+            input.value = '';
+            await refresh();
         }
-
-        responseBox.innerText = 'Added: ' + data.added;
-        textarea.value = '';
-        await refresh();
-
-    } catch (error) {
-        responseBox.innerText = error.message;
+    }catch(error){
+        message.textContent = 'Connection error. Try again.';
+    }finally{
+        button.disabled = false;
+        input.focus();
     }
 }
 
+document.getElementById('number').addEventListener('keydown', function(event){
+    if(event.key === 'Enter') addResult();
+});
+
 refresh();
-setInterval(refresh,30000);
+setInterval(refresh, 5000);
 </script>
 </body>
 </html>
@@ -356,15 +303,9 @@ setInterval(refresh,30000);
 class BotHandler(BaseHTTPRequestHandler):
 
     def send_json(self, data, status=200):
-        body = json.dumps(
-            data, ensure_ascii=False
-        ).encode("utf-8")
-
+        body = json.dumps(data).encode("utf-8")
         self.send_response(status)
-        self.send_header(
-            "Content-Type",
-            "application/json; charset=utf-8"
-        )
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -375,102 +316,72 @@ class BotHandler(BaseHTTPRequestHandler):
         if path == "/":
             body = HTML.encode("utf-8")
             self.send_response(200)
-            self.send_header(
-                "Content-Type",
-                "text/html; charset=utf-8"
-            )
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-            return
 
-        with lock:
-            results = load_results()
-
-        if path == "/api/analyze":
-            self.send_json({
-                "status": "ACTIVE",
-                "analysis": analyze(results)
-            })
+        elif path == "/api/analyze":
+            with lock:
+                self.send_json(analyze())
 
         elif path == "/api/history":
-            self.send_json({
-                "total": len(results),
-                "results": results
-            })
+            with lock:
+                self.send_json({"results": results})
 
         else:
-            self.send_json({"error":"Not found"},404)
+            self.send_json({"error": "Not found"}, 404)
 
     def do_POST(self):
-        path = self.path.split("?")[0]
-
-        if path != "/api/add-bulk":
-            self.send_json({"error":"Not found"},404)
+        if self.path != "/api/add":
+            self.send_json({"error": "Not found"}, 404)
             return
 
         try:
-            length = int(self.headers.get("Content-Length","0"))
+            length = int(self.headers.get("Content-Length", "0"))
 
-            if length <= 0 or length > 10000:
-                self.send_json({"error":"Invalid request size"},400)
+            if length <= 0 or length > 1000:
+                self.send_json({"error": "Invalid request"}, 400)
                 return
 
-            data = json.loads(self.rfile.read(length))
-            numbers = data.get("numbers")
+            body = self.rfile.read(length)
+            data = json.loads(body.decode("utf-8"))
 
-            if not isinstance(numbers,list) or not 1 <= len(numbers) <= 10:
-                self.send_json({"error":"Enter 1 to 10 numbers"},400)
-                return
+            if not isinstance(data, dict):
+                raise ValueError("Invalid data")
 
-            for number in numbers:
-                if (
-                    isinstance(number,bool)
-                    or not isinstance(number,int)
-                    or not 0 <= number <= 9
-                ):
-                    self.send_json({"error":"Numbers must be 0 to 9"},400)
-                    return
+            number = data.get("number")
+
+            if isinstance(number, bool) or not isinstance(number, int):
+                raise ValueError("Enter one digit from 0 to 9")
+
+            if not 0 <= number <= 9:
+                raise ValueError("Enter one digit from 0 to 9")
 
             with lock:
-                results = load_results()
-                added = 0
+                results.append({
+                    "period": make_period(),
+                    "number": number,
+                    "time": datetime.now(timezone.utc).isoformat()
+                })
 
-                for number in numbers:
-                    period = make_period(results)
-                    bs,color = details(number)
-
-                    results.append({
-                        "period":period,
-                        "number":number,
-                        "big_small":bs,
-                        "color":color
-                    })
-                    added += 1
-
-                results = results[-100:]
-                save_results(results)
-                analysis = analyze(results)
+                del results[:-100]
+                save_results()
+                answer = analyze()
 
             self.send_json({
-                "status":"success",
-                "added":added,
-                "analysis":analysis
+                "success": True,
+                "message": "Result added",
+                "analysis": answer
             })
 
-        except (ValueError,TypeError,KeyError):
-            self.send_json({"error":"Invalid result data"},400)
-
-    def log_message(self, format, *args):
-        pass
+        except (ValueError, TypeError, json.JSONDecodeError):
+            self.send_json({"error": "Enter only one number from 0 to 9"}, 400)
+        except OSError:
+            self.send_json({"error": "Could not save result"}, 500)
 
 
 if __name__ == "__main__":
-    print("Wingo 30 Seconds Bot ACTIVE")
-    print("Port:",PORT)
-
-    server = ThreadingHTTPServer(
-        ("0.0.0.0",PORT),
-        BotHandler
-    )
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), BotHandler)
+    print(f"Bot running on port {PORT}")
     server.serve_forever()
