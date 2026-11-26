@@ -1068,4 +1068,4 @@ if __name__ == "__main__":
     print("Bot running on port", PORT, flush=True)
     server.serve_forever()
  on port", PORT, flush=True)
-    server.serve_forever
+    server.serve_for
