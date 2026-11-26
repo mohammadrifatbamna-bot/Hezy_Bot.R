@@ -761,18 +761,311 @@ class Handler(BaseHTTPRequestHandler):
                 del results[:-100]
                 save_results()
 
-            self.send_json({"success": True, "item": item})
+            self.send_j
+import json
+import os
+from pathlib import Path
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock
+
+PORT = int(os.environ.get("PORT", "10000"))
+DATA_FILE = Path("results.json")
+lock = Lock()
+
+
+def load_results():
+    try:
+        data = json.loads(DATA_FILE.read_text())
+        if isinstance(data, list):
+            return [
+                int(n) for n in data
+                if isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= 99
+            ][-100:]
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return []
+
+
+results = load_results()
+
+
+def save_results():
+    DATA_FILE.write_text(json.dumps(results[-100:]))
+
+
+def category(number):
+    return "BIG" if number % 10 >= 5 else "SMALL"
+
+
+def analyze():
+    recent = results[-50:]
+    big = sum(1 for n in recent if category(n) == "BIG")
+    small = len(recent) - big
+    total = len(recent)
+
+    if total < 5:
+        prediction = "WAIT"
+        confidence = 0
+    elif big > small:
+        prediction = "BIG"
+        confidence = round(big / total * 100)
+    elif small > big:
+        prediction = "SMALL"
+        confidence = round(small / total * 100)
+    else:
+        prediction = "WAIT"
+        confidence = 50
+
+    streak = 0
+    streak_type = category(results[-1]) if results else "NONE"
+    for n in reversed(results):
+        if category(n) == streak_type:
+            streak += 1
+        else:
+            break
+
+    return {
+        "status": "ACTIVE",
+        "prediction": prediction,
+        "confidence": confidence,
+        "big": big,
+        "small": small,
+        "total": total,
+        "streak": streak,
+        "streak_type": streak_type,
+        "history": [
+            {"number": n, "type": category(n)}
+            for n in reversed(results[-20:])
+        ],
+        "last_update": datetime.now(timezone.utc).isoformat()
+    }
+
+
+HTML = r"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WINGO Signal Bot</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101827;color:#fff;font-family:Arial,sans-serif;padding:16px}
+.container{max-width:520px;margin:auto}
+h2{text-align:center;color:#38bdf8}
+.card{background:#1e293b;border-radius:14px;padding:18px;margin:14px 0}
+.center{text-align:center}
+.signal{font-size:35px;font-weight:bold;margin:12px}
+.big{color:#22c55e}
+.small{color:#f87171}
+.wait{color:#facc15}
+.label{color:#94a3b8;font-size:13px}
+.value{font-size:25px;font-weight:bold;margin-top:6px}
+input{width:100%;padding:15px;border-radius:9px;border:1px solid #475569;background:#0f172a;color:white;font-size:22px;text-align:center;margin:12px 0}
+button{width:100%;padding:14px;border:0;border-radius:9px;background:#0ea5e9;color:white;font-size:17px;font-weight:bold}
+button:active{opacity:.7}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.item{background:#0f172a;padding:14px;border-radius:10px;text-align:center}
+.history{display:flex;justify-content:space-between;padding:10px;border-bottom:1px solid #334155}
+.note{font-size:12px;color:#94a3b8;text-align:center;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="container">
+<h2>WINGO 30 SECONDS</h2>
+
+<div class="card center">
+<div class="label">BOT STATUS</div>
+<div class="value big" id="status">ACTIVE</div>
+</div>
+
+<div class="card center">
+<div class="label">NEXT BIG / SMALL SIGNAL</div>
+<div class="signal wait" id="prediction">WAIT</div>
+<div>Confidence: <b id="confidence">0%</b></div>
+<p class="note">Statistical estimate, not a guaranteed prediction.</p>
+</div>
+
+<div class="card">
+<h3>LIVE ANALYSIS</h3>
+<div class="grid">
+<div class="item">
+<div class="label">BIG</div>
+<div class="value big" id="big">0</div>
+</div>
+<div class="item">
+<div class="label">SMALL</div>
+<div class="value small" id="small">0</div>
+</div>
+<div class="item">
+<div class="label">TOTAL</div>
+<div class="value" id="total">0</div>
+</div>
+<div class="item">
+<div class="label">CURRENT STREAK</div>
+<div class="value" id="streak">0</div>
+</div>
+</div>
+<p class="note" id="message">Need at least 5 results for analysis.</p>
+</div>
+
+<div class="card">
+<h3>ADD RESULT</h3>
+<div class="label">Enter last two digits of period/result</div>
+<input id="number" type="number" min="0" max="99" placeholder="Example: 17">
+<button onclick="addResult()">ADD RESULT</button>
+<p class="note" id="response"></p>
+</div>
+
+<div class="card">
+<h3>RESULT HISTORY</h3>
+<div id="history">No results yet.</div>
+</div>
+
+<p class="note">BIG = last digit 5–9 | SMALL = last digit 0–4<br>Dashboard refreshes every 5 seconds.</p>
+</div>
+
+<script>
+async function refresh(){
+  try{
+    const r = await fetch('/api/state');
+    const d = await r.json();
+
+    document.getElementById('status').textContent=d.status;
+    const p=document.getElementById('prediction');
+    p.textContent=d.prediction;
+    p.className='signal '+(d.prediction==='BIG'?'big':d.prediction==='SMALL'?'small':'wait');
+
+    document.getElementById('confidence').textContent=d.confidence+'%';
+    document.getElementById('big').textContent=d.big;
+    document.getElementById('small').textContent=d.small;
+    document.getElementById('total').textContent=d.total;
+    document.getElementById('streak').textContent=d.streak+' '+d.streak_type;
+    document.getElementById('message').textContent =
+      d.total<5 ? 'Need at least 5 results for analysis.' : 'Analysis based on last '+d.total+' results.';
+
+    const h=document.getElementById('history');
+    if(!d.history.length){
+      h.textContent='No results yet.';
+    }else{
+      h.innerHTML=d.history.map(x =>
+        '<div class="history"><span>'+String(x.number).padStart(2,'0')+
+        '</span><b class="'+(x.type==='BIG'?'big':'small')+'">'+x.type+'</b></div>'
+      ).join('');
+    }
+  }catch(e){
+    document.getElementById('status').textContent='CONNECTING';
+  }
+}
+
+async function addResult(){
+  const input=document.getElementById('number');
+  const value=input.value.trim();
+  const response=document.getElementById('response');
+
+  if(!/^\d{1,2}$/.test(value)){
+    response.textContent='Enter a number from 0 to 99.';
+    return;
+  }
+
+  try{
+    const r=await fetch('/api/add',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({number:Number(value)})
+    });
+    const d=await r.json();
+    response.textContent=d.message || d.error;
+    if(r.ok){
+      input.value='';
+      refresh();
+    }
+  }catch(e){
+    response.textContent='Connection error. Try again.';
+  }
+}
+
+refresh();
+setInterval(refresh,5000);
+</script>
+</body>
+</html>
+"""
+
+
+class Handler(BaseHTTPRequestHandler):
+
+    def send_json(self, data, status=200):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+
+        if path == "/":
+            body = HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif path == "/api/state":
+            with lock:
+                self.send_json(analyze())
+
+        elif path == "/api/history":
+            with lock:
+                self.send_json({"results": results[-100:]})
+
+        else:
+            self.send_json({"error": "Not found"}, 404)
+
+    def do_POST(self):
+        if self.path != "/api/add":
+            self.send_json({"error": "Not found"}, 404)
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 1000:
+                self.send_json({"error": "Invalid request"}, 400)
+                return
+
+            data = json.loads(self.rfile.read(length))
+            number = data.get("number")
+
+            if isinstance(number, bool) or not isinstance(number, int) or not 0 <= number <= 99:
+                self.send_json({"error": "Enter a number from 0 to 99"}, 400)
+                return
+
+            with lock:
+                results.append(number)
+                del results[:-100]
+                save_results()
+
+            self.send_json({
+                "message": f"Result {number:02d} added successfully",
+                "type": category(number)
+            })
 
         except (ValueError, TypeError, json.JSONDecodeError):
-            self.send_json({"error": "Invalid data"}, 400)
-        except Exception:
-            self.send_json({"error": "Server error"}, 500)
+            self.send_json({"error": "Invalid input"}, 400)
+        except OSError:
+            self.send_json({"error": "Could not save result"}, 500)
 
     def log_message(self, format, *args):
-        pass
+        print(format % args)
 
 
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print("Bot running on port", PORT, flush=True)
+    server.serve_forever()
+ on port", PORT, flush=True)
     server.serve_forever
