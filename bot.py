@@ -399,4 +399,4 @@ class BotHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("0.0.0.0", PORT), BotHandler)
     print(f"Bot running on port {PORT}")
-    server.serve_forever()
+    server.serve_for
