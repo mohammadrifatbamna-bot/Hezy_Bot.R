@@ -28,25 +28,26 @@ def details(number):
 def load_results():
     try:
         data = json.loads(DATA_FILE.read_text())
-        results = []
-
         if not isinstance(data, list):
             return []
 
+        results = []
+
         for i, item in enumerate(data):
             if isinstance(item, dict):
-                period = str(item.get("period", ""))
+                period = str(item.get("period", "")).strip()
                 number = item.get("number")
             else:
                 period = "OLD-" + str(i + 1)
                 number = item
 
-            if (isinstance(number, int)
-                    and not isinstance(number, bool)
-                    and 0 <= number <= 9):
-
+            if (
+                period
+                and isinstance(number, int)
+                and not isinstance(number, bool)
+                and 0 <= number <= 9
+            ):
                 bs, color = details(number)
-
                 results.append({
                     "period": period,
                     "number": number,
@@ -76,17 +77,34 @@ def analyze(results):
         signal = "WAIT"
         confidence = 0
         message = "Need at least 5 results"
+    elif big > small:
+        signal = "BIG"
+        confidence = round(big / len(recent) * 100)
+        message = "Statistical estimate, not guaranteed."
+    elif small > big:
+        signal = "SMALL"
+        confidence = round(small / len(recent) * 100)
+        message = "Statistical estimate, not guaranteed."
     else:
-        signal = (
-            "BIG" if big > small
-            else "SMALL" if small > big
-            else "WAIT"
-        )
-        confidence = round(max(big, small) / len(recent) * 100)
-        message = "Statistical estimate, not a guaranteed prediction."
+        signal = "WAIT"
+        confidence = 50
+        message = "BIG and SMALL are equal."
+
+    numeric_periods = [
+        int(r["period"])
+        for r in results
+        if r["period"].isdigit()
+    ]
+
+    next_period = (
+        str(max(numeric_periods) + 1)
+        if numeric_periods else "Waiting"
+    )
 
     return {
         "signal": signal,
+        "next_signal": signal,
+        "next_period": next_period,
         "confidence": confidence,
         "big": big,
         "small": small,
@@ -103,54 +121,67 @@ HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Wingo 30 Seconds Bot</title>
+
 <style>
 body {
-    background:#101827;
-    color:white;
-    font-family:Arial;
-    text-align:center;
-    padding:12px;
+    background: #101827;
+    color: white;
+    font-family: Arial;
+    text-align: center;
+    padding: 12px;
 }
 .card {
-    background:#1e293b;
-    padding:18px;
-    margin:15px auto;
-    border-radius:12px;
-    max-width:550px;
+    background: #1e293b;
+    padding: 18px;
+    margin: 15px auto;
+    border-radius: 12px;
+    max-width: 550px;
 }
-h1 {color:#38bdf8;}
-.signal {font-size:35px;font-weight:bold;}
-input,textarea,button {
-    padding:12px;
-    margin:6px;
-    border-radius:8px;
-    border:0;
-    font-size:16px;
-    max-width:95%;
+h1 { color: #38bdf8; }
+.signal {
+    font-size: 35px;
+    font-weight: bold;
+}
+.prediction {
+    font-size: 30px;
+    font-weight: bold;
+    color: #22c55e;
+}
+textarea, button {
+    padding: 12px;
+    margin: 6px;
+    border-radius: 8px;
+    border: 0;
+    font-size: 16px;
+    max-width: 95%;
 }
 textarea {
-    width:90%;
-    height:150px;
-    background:#f1f5f9;
-    color:#111827;
+    width: 90%;
+    height: 150px;
+    background: #f1f5f9;
+    color: #111827;
 }
 button {
-    background:#0ea5e9;
-    color:white;
-    cursor:pointer;
+    background: #0ea5e9;
+    color: white;
+    cursor: pointer;
 }
 table {
-    width:100%;
-    border-collapse:collapse;
-    font-size:12px;
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
 }
-td,th {
-    padding:9px 3px;
-    border-bottom:1px solid #475569;
+td, th {
+    padding: 9px 3px;
+    border-bottom: 1px solid #475569;
 }
-.small {color:#94a3b8;font-size:12px;}
+.small {
+    color: #94a3b8;
+    font-size: 12px;
+}
 </style>
 </head>
+
 <body>
 
 <h1>WINGO 30 SECONDS</h1>
@@ -158,6 +189,17 @@ td,th {
 <div class="card">
 <h2>BOT STATUS</h2>
 <div id="status">Connecting...</div>
+</div>
+
+<div class="card">
+<h2>NEXT PERIOD</h2>
+<div class="prediction" id="nextPeriod">Waiting</div>
+
+<h2>NEXT BIG / SMALL</h2>
+<div class="signal" id="nextSignal">WAIT</div>
+
+<p>Confidence: <span id="nextConfidence">0</span>%</p>
+<p class="small">Statistical estimate, not guaranteed.</p>
 </div>
 
 <div class="card">
@@ -201,15 +243,16 @@ td,th {
 </div>
 
 <p class="small">
-Analysis refreshes every 30 seconds.
-Results are entered manually.
-Statistical estimates are not guaranteed predictions.
+Dashboard refreshes every 30 seconds.
+New game results must be entered manually.
+Predictions are statistical estimates only.
 </p>
 
 <script>
 async function refresh() {
     try {
         const response = await fetch('/api/analyze');
+
         if (!response.ok) throw new Error("API error");
 
         const data = await response.json();
@@ -222,9 +265,18 @@ async function refresh() {
         document.getElementById('small').innerText = a.small;
         document.getElementById('message').innerText = a.message;
         document.getElementById('updated').innerText =
-            a.updated || 'Waiting for results';
+            'Last update: ' + a.updated;
+
+        document.getElementById('nextPeriod').innerText =
+            a.next_period;
+        document.getElementById('nextSignal').innerText =
+            a.next_signal;
+        document.getElementById('nextConfidence').innerText =
+            a.confidence;
 
         const h = await fetch('/api/history');
+        if (!h.ok) throw new Error("History error");
+
         const history = await h.json();
         const tbody = document.getElementById('history');
 
@@ -261,9 +313,11 @@ async function addResults() {
 
         const parts = line.split(',').map(x => x.trim());
 
-        if (parts.length !== 2 ||
+        if (
+            parts.length !== 2 ||
             !parts[0] ||
-            !/^\\d+$/.test(parts[1])) {
+            !/^\\d+$/.test(parts[1])
+        ) {
             responseBox.innerText =
                 'Invalid format: use Period,Number';
             return;
@@ -293,12 +347,14 @@ async function addResults() {
         const response = await fetch('/api/add-bulk', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({results})
+            body: JSON.stringify({results: results})
         });
 
         const data = await response.json();
 
-        if (!response.ok) throw new Error(data.error);
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed');
+        }
 
         responseBox.innerText =
             'Added: ' + data.added +
@@ -324,9 +380,15 @@ setInterval(refresh, 30000);
 class BotHandler(BaseHTTPRequestHandler):
 
     def send_json(self, data, status=200):
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(
+            data, ensure_ascii=False
+        ).encode("utf-8")
+
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header(
+            "Content-Type",
+            "application/json; charset=utf-8"
+        )
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -336,8 +398,12 @@ class BotHandler(BaseHTTPRequestHandler):
 
         if path == "/":
             body = HTML.encode("utf-8")
+
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header(
+                "Content-Type",
+                "text/html; charset=utf-8"
+            )
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -369,10 +435,14 @@ class BotHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            length = int(
+                self.headers.get("Content-Length", "0")
+            )
 
             if length <= 0 or length > 10000:
-                self.send_json({"error": "Invalid request size"}, 400)
+                self.send_json(
+                    {"error": "Invalid request size"}, 400
+                )
                 return
 
             data = json.loads(self.rfile.read(length))
@@ -385,23 +455,33 @@ class BotHandler(BaseHTTPRequestHandler):
             else:
                 items = data.get("results")
 
-            if not isinstance(items, list) or not 1 <= len(items) <= 10:
-                self.send_json({"error": "Enter 1 to 10 results"}, 400)
+            if (
+                not isinstance(items, list)
+                or not 1 <= len(items) <= 10
+            ):
+                self.send_json(
+                    {"error": "Enter 1 to 10 results"}, 400
+                )
                 return
 
             for item in items:
                 if not isinstance(item, dict):
                     raise ValueError()
 
-                period = str(item.get("period", "")).strip()
+                period = str(
+                    item.get("period", "")
+                ).strip()
+
                 number = item.get("number")
 
                 if not period or len(period) > 40:
                     raise ValueError()
 
-                if (isinstance(number, bool)
-                        or not isinstance(number, int)
-                        or not 0 <= number <= 9):
+                if (
+                    isinstance(number, bool)
+                    or not isinstance(number, int)
+                    or not 0 <= number <= 9
+                ):
                     raise ValueError()
 
             added = 0
@@ -409,7 +489,9 @@ class BotHandler(BaseHTTPRequestHandler):
 
             with lock:
                 results = load_results()
-                existing = {r["period"] for r in results}
+                existing = {
+                    r["period"] for r in results
+                }
 
                 for item in items:
                     period = str(item["period"]).strip()
@@ -442,8 +524,15 @@ class BotHandler(BaseHTTPRequestHandler):
                 "analysis": analysis
             })
 
-        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
-            self.send_json({"error": "Invalid result data"}, 400)
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            json.JSONDecodeError
+        ):
+            self.send_json(
+                {"error": "Invalid result data"}, 400
+            )
 
     def log_message(self, format, *args):
         pass
@@ -453,5 +542,8 @@ if __name__ == "__main__":
     print("Wingo 30 Seconds Analysis Dashboard ACTIVE")
     print("Port:", PORT)
 
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), BotHandler)
+    server = ThreadingHTTPServer(
+        ("0.0.0.0", PORT),
+        BotHandler
+    )
     server.serve_forever()
