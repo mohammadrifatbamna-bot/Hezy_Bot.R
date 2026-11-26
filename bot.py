@@ -399,4 +399,380 @@ class BotHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("0.0.0.0", PORT), BotHandler)
     print(f"Bot running on port {PORT}")
-    server.serve_for
+    server.
+import json
+import os
+from pathlib import Path
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock
+
+PORT = int(os.environ.get("PORT", 10000))
+DATA_FILE = Path("results.json")
+lock = Lock()
+
+
+def load_results():
+    try:
+        data = json.loads(DATA_FILE.read_text())
+        if not isinstance(data, list):
+            return []
+        return [
+            item for item in data
+            if isinstance(item, dict)
+            and str(item.get("last_two", "")).isdigit()
+            and len(str(item.get("last_two", ""))) == 2
+        ][-100:]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+results = load_results()
+
+
+def save_results():
+    DATA_FILE.write_text(json.dumps(results[-100:], indent=2))
+
+
+def get_result(item):
+    digit = int(str(item["last_two"])[-1])
+    return "BIG" if digit >= 5 else "SMALL"
+
+
+def analyze():
+    recent = results[-50:]
+    big = sum(get_result(x) == "BIG" for x in recent)
+    small = len(recent) - big
+
+    if len(recent) < 5:
+        signal, confidence = "WAIT", 0
+    elif big > small:
+        signal = "BIG"
+        confidence = round(big / len(recent) * 100)
+    elif small > big:
+        signal = "SMALL"
+        confidence = round(small / len(recent) * 100)
+    else:
+        signal, confidence = "WAIT", 50
+
+    return {
+        "signal": signal,
+        "confidence": confidence,
+        "big": big,
+        "small": small,
+        "total": len(recent)
+    }
+
+
+def get_streak():
+    if not results:
+        return {"type": "NONE", "count": 0}
+
+    latest = get_result(results[-1])
+    count = 0
+
+    for item in reversed(results):
+        if get_result(item) != latest:
+            break
+        count += 1
+
+    return {"type": latest, "count": count}
+
+
+def get_stats():
+    wins = sum(x.get("outcome") == "WIN" for x in results)
+    losses = sum(x.get("outcome") == "LOSS" for x in results)
+    total = wins + losses
+
+    return {
+        "wins": wins,
+        "losses": losses,
+        "accuracy": round(wins / total * 100) if total else 0
+    }
+
+
+def next_period():
+    if not results:
+        return "1"
+    try:
+        return str(int(results[-1]["period"]) + 1)
+    except (ValueError, TypeError, KeyError):
+        return str(len(results) + 1)
+
+
+def get_state():
+    return {
+        "status": "ACTIVE",
+        "next_period": next_period(),
+        "analysis": analyze(),
+        "streak": get_streak(),
+        "stats": get_stats(),
+        "history": list(reversed(results[-20:])),
+        "last_update": datetime.now(timezone.utc).isoformat()
+    }
+
+
+HTML = r"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WINGO 30 SECONDS</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:15px;background:#101522;color:white;font-family:Arial}
+.main{max-width:520px;margin:auto}
+h2{text-align:center;color:#54d6ff}
+.card{background:#1b2435;padding:17px;margin:12px 0;border-radius:14px;border:1px solid #303b50}
+h3{font-size:14px;color:#9bb0d0;margin:0 0 13px}
+.signal{text-align:center;font-size:36px;font-weight:bold;padding:14px}
+.big{color:#28df91}.small{color:#ff7373}.wait{color:#ffc857}
+.stats{display:flex;gap:7px}
+.stat{flex:1;text-align:center;background:#111a29;padding:12px 4px;border-radius:9px;font-size:12px}
+.stat b{display:block;font-size:22px;margin-top:7px}
+input{width:100%;padding:16px;background:#101522;color:white;border:1px solid #53627a;border-radius:9px;font-size:22px;text-align:center}
+button{width:100%;padding:15px;margin-top:10px;background:#13b981;color:white;border:0;border-radius:9px;font-size:17px;font-weight:bold}
+button:disabled{opacity:.5}
+.note{color:#aab7cc;font-size:12px;text-align:center}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:10px 4px;border-bottom:1px solid #354057;text-align:center}
+#message{text-align:center;margin-top:10px;color:#54d6ff}
+</style>
+</head>
+<body>
+<div class="main">
+<h2>WINGO 30 SECONDS</h2>
+
+<div class="card">
+<h3>BOT STATUS</h3>
+<div class="signal big">ACTIVE</div>
+<div class="stats">
+<div class="stat">NEXT PERIOD<b id="period">1</b></div>
+<div class="stat">TOTAL RESULTS<b id="total">0</b></div>
+</div>
+</div>
+
+<div class="card">
+<h3>NEXT BIG / SMALL SIGNAL</h3>
+<div id="signal" class="signal wait">WAIT</div>
+<p class="note">Confidence: <b id="confidence">0</b>%</p>
+<p class="note">Statistical estimate, not guaranteed prediction.</p>
+</div>
+
+<div class="card">
+<h3>LIVE ANALYSIS</h3>
+<div class="stats">
+<div class="stat">BIG<b class="big" id="big">0</b></div>
+<div class="stat">SMALL<b class="small" id="small">0</b></div>
+<div class="stat">TOTAL<b id="analysisTotal">0</b></div>
+</div>
+<p class="note" id="analysisNote">Need at least 5 results.</p>
+</div>
+
+<div class="card">
+<h3>WIN / LOSS RECORD</h3>
+<div class="stats">
+<div class="stat">WIN<b class="big" id="wins">0</b></div>
+<div class="stat">LOSS<b class="small" id="losses">0</b></div>
+<div class="stat">ACCURACY<b id="accuracy">0%</b></div>
+</div>
+</div>
+
+<div class="card">
+<h3>CURRENT STREAK</h3>
+<div class="signal" id="streak">NONE 0</div>
+</div>
+
+<div class="card">
+<h3>ADD RESULT</h3>
+<p class="note">83517 হলে 17 লিখুন। 26480 হলে 80 লিখুন।</p>
+<input id="number" type="text" inputmode="numeric" maxlength="2" placeholder="Enter last 2 digits">
+<button id="addButton" onclick="addResult()">ADD RESULT</button>
+<div id="message"></div>
+</div>
+
+<div class="card">
+<h3>RESULT HISTORY</h3>
+<table>
+<thead><tr><th>Period</th><th>Number</th><th>Result</th><th>Outcome</th></tr></thead>
+<tbody id="history"></tbody>
+</table>
+</div>
+<p class="note">Auto refresh every 5 seconds</p>
+</div>
+
+<script>
+async function refresh(){
+ try{
+  const response = await fetch('/api/state');
+  const d = await response.json();
+
+  document.getElementById('period').textContent = d.next_period;
+  document.getElementById('total').textContent = d.analysis.total;
+  document.getElementById('big').textContent = d.analysis.big;
+  document.getElementById('small').textContent = d.analysis.small;
+  document.getElementById('analysisTotal').textContent = d.analysis.total;
+  document.getElementById('confidence').textContent = d.analysis.confidence;
+
+  const s = document.getElementById('signal');
+  s.textContent = d.analysis.signal;
+  s.className = 'signal ' + d.analysis.signal.toLowerCase();
+
+  document.getElementById('analysisNote').textContent =
+   d.analysis.total < 5 ? 'Need at least 5 results.' :
+   'Analysis based on last ' + d.analysis.total + ' results.';
+
+  document.getElementById('wins').textContent = d.stats.wins;
+  document.getElementById('losses').textContent = d.stats.losses;
+  document.getElementById('accuracy').textContent = d.stats.accuracy + '%';
+  document.getElementById('streak').textContent =
+   d.streak.type + ' ' + d.streak.count;
+
+  document.getElementById('history').innerHTML = d.history.map(x => {
+   const result = Number(x.last_two.slice(-1)) >= 5 ? 'BIG' : 'SMALL';
+   return '<tr><td>' + x.period + '</td><td>' + x.last_two +
+    '</td><td class="' + result.toLowerCase() + '">' + result +
+    '</td><td>' + (x.outcome || 'SKIP') + '</td></tr>';
+  }).join('');
+
+ }catch(e){
+  document.getElementById('message').textContent = 'Connecting...';
+ }
+}
+
+async function addResult(){
+ const input = document.getElementById('number');
+ const button = document.getElementById('addButton');
+ const message = document.getElementById('message');
+ const value = input.value.trim();
+
+ if(!/^[0-9]{2}$/.test(value)){
+  message.textContent = 'Enter exactly 2 digits.';
+  return;
+ }
+
+ button.disabled = true;
+ message.textContent = 'Adding result...';
+
+ try{
+  const response = await fetch('/api/add', {
+   method:'POST',
+   headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({last_two:value})
+  });
+
+  const data = await response.json();
+
+  if(!response.ok){
+   message.textContent = data.error || 'Error adding result';
+  }else{
+   message.textContent = 'Result added successfully';
+   input.value = '';
+   await refresh();
+  }
+ }catch(e){
+  message.textContent = 'Connection error';
+ }finally{
+  button.disabled = false;
+ }
+}
+
+document.getElementById('number').addEventListener('keydown', e => {
+ if(e.key === 'Enter') addResult();
+});
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
+"""
+
+
+class Handler(BaseHTTPRequestHandler):
+
+    def send_json(self, data, status=200):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+
+        if path == "/":
+            body = HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif path == "/api/state":
+            with lock:
+                self.send_json(get_state())
+
+        elif path == "/api/history":
+            with lock:
+                self.send_json({"results": results})
+
+        else:
+            self.send_json({"error": "Not found"}, 404)
+
+    def do_POST(self):
+        if self.path != "/api/add":
+            self.send_json({"error": "Not found"}, 404)
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 1000:
+                self.send_json({"error": "Invalid request"}, 400)
+                return
+
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            value = str(data.get("last_two", ""))
+
+            if len(value) != 2 or not value.isdigit():
+                self.send_json({"error": "Enter exactly 2 digits"}, 400)
+                return
+
+            with lock:
+                previous_signal = analyze()["signal"]
+                actual = "BIG" if int(value[-1]) >= 5 else "SMALL"
+
+                if previous_signal == "WAIT":
+                    outcome = "SKIP"
+                elif previous_signal == actual:
+                    outcome = "WIN"
+                else:
+                    outcome = "LOSS"
+
+                item = {
+                    "period": next_period(),
+                    "last_two": value,
+                    "outcome": outcome,
+                    "time": datetime.now(timezone.utc).isoformat()
+                }
+
+                results.append(item)
+                del results[:-100]
+                save_results()
+
+            self.send_json({"success": True, "item": item})
+
+        except (ValueError, TypeError, json.JSONDecodeError):
+            self.send_json({"error": "Invalid data"}, 400)
+        except Exception:
+            self.send_json({"error": "Server error"}, 500)
+
+    def log_message(self, format, *args):
+        pass
+
+
+if __name__ == "__main__":
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    print("Bot running on port", PORT, flush=True)
+    server.serve_forever
