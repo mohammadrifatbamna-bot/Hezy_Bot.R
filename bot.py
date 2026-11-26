@@ -1,4 +1,64 @@
-import json
+    def send_json(self, data, status=200):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+
+        if path == "/":
+            body = HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif path == "/api/analyze":
+            self.send_json(analyze())
+
+        elif path == "/api/history":
+            self.send_json({"results": results})
+
+        else:
+            self.send_json({"error": "Not found"}, 404)
+
+    def do_POST(self):
+        if self.path != "/api/add":
+            self.send_json({"error": "Not found"}, 404)
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+
+            if length <= 0 or length > 1000:
+                raise ValueError("Invalid request")
+
+            data = json.loads(self.rfile.read(length))
+            number = data.get("number")
+
+            if isinstance(number, bool) or not isinstance(number, int):
+                raise ValueError("Number must be an integer")
+
+            if not 0 <= number <= 9:
+                raise ValueError("Number must be 0 to 9")
+
+            results.append(number)
+            del results[:-500]
+            save_results()
+
+            self.send_json({
+                "message": "Result added successfully",
+                "analysis": analyze()
+            })
+
+        except (ValueError, TypeError, json.JSONDecodeError):
+            self.send_json(
+                {"message": "Invalid number. Enter 0 to 9."}, 400
+            )import json
 import os
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -182,7 +242,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == "/":
+        path = self.path.split("?")[0]
+
+        if path == "/":
             body = HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -190,10 +252,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
-        elif self.path == "/api/analyze":
+        elif path == "/api/analyze":
             self.send_json(analyze())
 
-        elif self.path == "/api/history":
+        elif path == "/api/history":
             self.send_json({"results": results})
 
         else:
