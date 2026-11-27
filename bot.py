@@ -1,4 +1,4 @@
-signal": signal,
+gnal,
         "confidence": confidence,
         "big": big,
         "small": small,
