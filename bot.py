@@ -1,4 +1,4 @@
-"signal": signal,
+signal": signal,
         "confidence": confidence,
         "big": big,
         "small": small,
